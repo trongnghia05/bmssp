@@ -1,18 +1,14 @@
-#!/usr/bin/env python3
 """
-bmssp_full_impl.py
 
-Single-file implementation:
- - Dijkstra's algorithm (standard).
- - A BMSSP-inspired implementation faithful to the pseudocode structure:
-    BMSSP (recursive), FIND_PIVOTS (bounded Bellman-Ford-like), BASECASE (Dijkstra-like).
- - Practical DataStructure D (heap + dictionary) implementing insert, pull, batch_prepend.
- - Instrumentation and randomized test harness.
+Triển khai đầy đủ trong một file:
+ - Thuật toán Dijkstra (chuẩn).
+ - Một số chỗ khác BMSSP papper, do không chạy được, bám sát cấu trúc giả mã:
+    BMSSP (đệ quy), FIND_PIVOTS (giống Bellman-Ford có giới hạn), BASECASE (tương tự Dijkstra).
+ - Cấu trúc dữ liệu thực tế D (heap + dictionary) cài đặt insert, pull, batch_prepend.
+ - Các phép đo hiệu năng và bộ test ngẫu nhiên.
 
-Notes:
- - This is a runnable, practical implementation. The paper's theoretical data structure
-   and tight complexity constants are nontrivial to reproduce exactly; this code aims
-   to reflect the control flow and correctness while being usable for experiments.
+Ghi chú:
+ - Đây là một bản cài đặt thực tế có thể chạy được. Cấu trúc dữ liệu lý thuyết và hằng số độ phức tạp chặt trong bài báo rất khó implement chính xác; mã này hướng đến việc phản ánh đúng luồng điều khiển và tính đúng đắn, đồng thời có thể dùng để thử nghiệm.
 """
 
 from __future__ import annotations
@@ -30,14 +26,14 @@ Graph = Dict[Node, List[Tuple[Node, Weight]]]
 
 
 # ---------------------------
-# Utilities & Graph generator
+# Bộ sinh đồ thị
 # ---------------------------
 def generate_sparse_directed_graph(n: int, m: int, max_w: float = 100.0, seed: Optional[int] = None) -> Tuple[Graph, List[Edge]]:
     if seed is not None:
         random.seed(seed)
     graph: Graph = {i: [] for i in range(n)}
     edges: List[Edge] = []
-    # weak backbone to avoid isolated nodes
+    # Xây dựng "xương sống" yếu để tránh nút cô lập
     for i in range(1, n):
         u = random.randrange(0, i)
         w = random.uniform(1.0, max_w)
@@ -54,7 +50,7 @@ def generate_sparse_directed_graph(n: int, m: int, max_w: float = 100.0, seed: O
 
 
 # ---------------------------
-# Instrumentation
+# Đánh dấu đỉnh
 # ---------------------------
 class Instrument:
     def __init__(self):
@@ -92,16 +88,16 @@ def dijkstra(graph: Graph, source: Node, instr: Optional[Instrument] = None) -> 
 
 
 # ---------------------------
-# DataStructure D (practical)
+# Cấu trúc dữ liệu D
 # ---------------------------
 class DataStructureD:
     """
-    Practical approximation of the paper's D:
+    Phiên bản xấp xỉ thực tế của D trong bài báo:
     - insert(v, key)
-    - batch_prepend(iterable of (v,key))
-    - pull() -> (Bi, Si) where Si is a small set of vertices with smallest keys.
+    - batch_prepend(danh sách (v, key))
+    - pull() -> (Bi, Si), trong đó Si là tập nhỏ các đỉnh có khóa nhỏ nhất.
     - empty()
-    Internal: heap + dict for current best keys. pull returns up to block_size items.
+    Nội bộ: heap + dict lưu khóa hiện tại tốt nhất. pull trả về tối đa block_size phần tử.
     """
 
     def __init__(self, M: int, B_upper: float, block_size: Optional[int] = None):
@@ -109,7 +105,7 @@ class DataStructureD:
         self.best: Dict[Node, Weight] = {}
         self.M = max(1, M)
         self.B_upper = B_upper
-        # choose block size heuristic from M
+        # Chọn block_size dựa theo M (heuristic)
         self.block_size = block_size if block_size is not None else max(1, self.M // 8)
 
     def insert(self, v: Node, key: Weight):
@@ -119,12 +115,12 @@ class DataStructureD:
             heapq.heappush(self.heap, (key, v))
 
     def batch_prepend(self, iterable_pairs):
-        # They are expected to have small keys — but implementation same as insert
+        # Các phần tử này được kỳ vọng có key nhỏ — nhưng cài đặt giống insert
         for v, key in iterable_pairs:
             self.insert(v, key)
 
     def _cleanup(self):
-        # Remove stale heap entries
+        # Loại bỏ các phần tử cũ trong heap
         while self.heap and self.best.get(self.heap[0][1]) != self.heap[0][0]:
             heapq.heappop(self.heap)
 
@@ -134,56 +130,55 @@ class DataStructureD:
 
     def pull(self) -> Tuple[Weight, Set[Node]]:
         """
-        Return Bi (the smallest key present) and a set Si of up to block_size vertices with smallest keys.
+        Trả về Bi (khóa nhỏ nhất hiện có) và tập Si gồm tối đa block_size đỉnh có khoảng cách nhỏ nhất.
         """
         self._cleanup()
         if not self.heap:
-            raise IndexError("pull from empty D")
-        # smallest key
+            raise IndexError("pull từ D rỗng")
+        # Khóa nhỏ nhất
         Bi = self.heap[0][0]
         Si: Set[Node] = set()
-        # Pop up to block_size best current entries
+        # Lấy tối đa block_size phần tử tốt nhất
         while self.heap and len(Si) < self.block_size:
             key, v = heapq.heappop(self.heap)
             if self.best.get(v) == key:
                 Si.add(v)
-                # remove from best to mark as "pulled"
+                # Xóa khỏi best để đánh dấu đã lấy ra
                 del self.best[v]
         return Bi, Si
 
 
 # ---------------------------
-# FIND_PIVOTS (practical bounded BF)
+# FIND_PIVOTS (giống Bellman-Ford có giới hạn)
 # ---------------------------
 def find_pivots(graph: Graph, dist: Dict[Node, Weight], S: Set[Node], B: float, n: int,
                 k_steps: int, p_limit: int, instr: Optional[Instrument] = None) -> Tuple[Set[Node], Set[Node]]:
     """
-    Heuristic approximation of FINDPIVOTS:
-      - Run up to k_steps of Bellman-Ford-like relaxations starting from S (only considering nodes with dist < B).
-      - Collect W = nodes that got finalized/reached within those k steps (i.e., discovered by these relaxations).
-      - Choose P as up to p_limit nodes from S with smallest dist[] (ensures P non-empty when S non-empty).
-    Returns (P, W).
+    Xấp xỉ heuristic của FIND_PIVOTS:
+      - Chạy tối đa k_steps vòng lặp relax kiểu Bellman-Ford bắt đầu từ S (chỉ xét các nút có dist < B).
+      - W = tập các node được phát hiện trong các bước này.
+      - Chọn P gồm tối đa p_limit node (đỉnh) trong S có dist nhỏ nhất.
+    Trả về (P, W).
     """
     if instr is None:
         instr = Instrument()
 
-    # Filter S to those with dist < B
+    # Lọc S chỉ còn các đỉnh có dist < B
     S_filtered = [v for v in S if dist.get(v, float('inf')) < B]
-    # Choose pivots P — heuristic: smallest distances in S_filtered
+    # Chọn các pivot P — heuristic: dist nhỏ nhất trong S_filtered
     if not S_filtered:
-        # fallback: choose up to p_limit arbitrary samples from S
+        # Nếu trống, chọn ngẫu nhiên tối đa p_limit phần tử trong S
         P = set(list(S)[:max(1, min(len(S), p_limit))]) if S else set()
     else:
         S_filtered.sort(key=lambda v: dist.get(v, float('inf')))
         P = set(S_filtered[:max(1, min(len(S_filtered), p_limit))])
 
-    # Bounded BF: start frontier from P (if P empty use S)
+    # Bellman-Ford giới hạn: bắt đầu từ P (nếu P rỗng thì dùng S)
     source_frontier = P if P else set(S)
     discovered = set(source_frontier)
     frontier = set(source_frontier)
 
-    # local copy of tentative distances (we operate on global dist but will update dist in caller)
-    # We'll perform relaxations but not set dist globally here; instead return W (discovered)
+    # Bản sao cục bộ của dist; chỉ dùng tạm trong vòng lặp
     for _ in range(max(1, k_steps)):
         if not frontier:
             break
@@ -195,27 +190,25 @@ def find_pivots(graph: Graph, dist: Dict[Node, Weight], S: Set[Node], B: float, 
             for v, w in graph[u]:
                 instr.relaxations += 1
                 nd = du + w
-                # consider only nodes with nd < B
                 if nd < B and v not in discovered:
                     discovered.add(v)
                     next_front.add(v)
         frontier = next_front
 
     W = discovered.copy()
-    # P must be small relative to S; ensure non-empty if S non-empty
     if not P and S:
         P = {next(iter(S))}
     return P, W
 
 
 # ---------------------------
-# BASECASE (Dijkstra-l ike)
+# BASECASE (tương tự Dijkstra)
 # ---------------------------
 def basecase(graph: Graph, dist: Dict[Node, Weight], B: float, S: Set[Node], k: int, instr: Optional[Instrument] = None) -> Tuple[float, Set[Node]]:
     """
-    BASECASE: S should be singleton (but if not, pick best node in S).
-    Run Dijkstra-like expansion from that node limited by B, and stop after finding up to k+1 completed nodes.
-    Return (B_prime, Uo_set).
+    BASECASE: S nên là tập đơn (nhưng nếu không, chọn nút có dist nhỏ nhất).
+    Chạy mở rộng kiểu Dijkstra giới hạn bởi B, dừng sau khi tìm được tối đa k+1 nút hoàn tất.
+    Trả về (B_prime, Uo_set).
     """
     if instr is None:
         instr = Instrument()
@@ -223,9 +216,9 @@ def basecase(graph: Graph, dist: Dict[Node, Weight], B: float, S: Set[Node], k: 
     if not S:
         return B, set()
 
-    # choose source x in S with smallest dist
+    # Chọn đỉnh x trong S có dist nhỏ nhất
     x = min(S, key=lambda v: dist.get(v, float('inf')))
-    # local heap
+    # Heap cục bộ
     heap: List[Tuple[Weight, Node]] = []
     start_d = dist.get(x, float('inf'))
     heapq.heappush(heap, (start_d, x))
@@ -239,7 +232,6 @@ def basecase(graph: Graph, dist: Dict[Node, Weight], B: float, S: Set[Node], k: 
         instr.heap_ops += 1
         if d_u > dist.get(u, float('inf')):
             continue
-        # mark 'u' complete for this basecase
         if u not in Uo:
             Uo.add(u)
         for v, w in graph[u]:
@@ -262,47 +254,42 @@ def basecase(graph: Graph, dist: Dict[Node, Weight], B: float, S: Set[Node], k: 
 
 
 # ---------------------------
-# BMSSP (practical recursive)
+# BMSSP (phiên bản đệ quy thực tế)
 # ---------------------------
 def bmssp(graph: Graph, dist: Dict[Node, Weight], edges: List[Edge],
           l: int, B: float, S: Set[Node], n: int,
           instr: Optional[Instrument] = None) -> Tuple[float, Set[Node]]:
     """
-    BMSSP recursive function.
-    - Uses find_pivots, DataStructureD, basecase as building blocks.
-    - l: recursion depth; when l==0 call basecase.
-    - n: number of nodes in graph (for parameter choices).
+    Hàm đệ quy BMSSP.
+    - Dùng find_pivots, DataStructureD, basecase làm các khối cơ bản.
+    - l: độ sâu đệ quy; khi l==0 thì gọi basecase.
+    - n: số đỉnh của đồ thị (dùng để chọn tham số).
     """
     if instr is None:
         instr = Instrument()
 
-    # sensible parameter choices (heuristic approximations from the paper)
+    # Chọn tham số hợp lý (xấp xỉ heuristic từ bài báo)
     if n <= 2:
         t_param = 1
         k_param = 2
     else:
-        # t ~ (log n)^{2/3}, k ~ (log n)^{1/3} (rounded and clamped)
         t_param = max(1, int(round((math.log(max(3, n)) ** (2.0 / 3.0)))))
         k_param = max(2, int(round((math.log(max(3, n)) ** (1.0 / 3.0)))))
 
-    # If l == 0 then basecase (ensure S is at least singleton)
+    # Nếu l == 0 thì gọi basecase
     if l <= 0:
-        # If S empty, nothing to do
         if not S:
             return B, set()
         return basecase(graph, dist, B, S, k_param, instr)
 
-    # FIND_PIVOTS: compute P, W
-    # use p_limit proportional to 2^t (heuristic)
-    p_limit = max(1, 2 ** min(10, t_param))  # cap exponent to keep p_limit reasonable
-    # choose k_steps for find_pivots: k_param * some small constant
+    # Tìm P, W
+    p_limit = max(1, 2 ** min(10, t_param))
     k_steps = max(1, k_param)
     P, W = find_pivots(graph, dist, S, B, n, k_steps, p_limit, instr)
 
-    # Data structure D initialization
+    # Khởi tạo cấu trúc D
     M = 2 ** max(0, (l - 1) * t_param)
     D = DataStructureD(M, B, block_size=max(1, min(len(P) or 1, 64)))
-    # insert pivots into D
     for x in P:
         D.insert(x, dist.get(x, float('inf')))
 
@@ -310,25 +297,23 @@ def bmssp(graph: Graph, dist: Dict[Node, Weight], edges: List[Edge],
     U: Set[Node] = set()
     B_prime_sub_values: List[float] = []
 
-    # loop guard & limit to avoid pathological loops
+    # Giới hạn vòng lặp để tránh trường hợp bất thường
     loop_guard = 0
     limit = k_param * (2 ** (l * max(1, t_param)))
     while len(U) < limit and not D.empty():
         loop_guard += 1
         if loop_guard > 20000:
-            # safety break (shouldn't happen for normal sizes)
             break
         try:
             Bi, Si = D.pull()
         except IndexError:
             break
-        # Recursive call
+        # Gọi đệ quy
         B_prime_sub, Ui = bmssp(graph, dist, edges, l - 1, Bi, Si, n, instr)
         B_prime_sub_values.append(B_prime_sub)
-        # Add Ui to U
         U |= Ui
 
-        # Relax edges from Ui
+        # Relax các cạnh từ Ui
         K_for_batch: Set[Tuple[Node, Weight]] = set()
         for u in Ui:
             du = dist.get(u, float('inf'))
@@ -337,14 +322,12 @@ def bmssp(graph: Graph, dist: Dict[Node, Weight], edges: List[Edge],
             for v, w_uv in graph[u]:
                 instr.relaxations += 1
                 newd = du + w_uv
-                # Accept equality per remark (<=) to allow reuse
                 if newd <= dist.get(v, float('inf')):
                     dist[v] = newd
                     if Bi <= newd < B:
                         D.insert(v, newd)
                     elif B_prime_sub <= newd < Bi:
                         K_for_batch.add((v, newd))
-        # Also include Si nodes whose dist falls into [B_prime_sub, Bi)
         for x in Si:
             dx = dist.get(x, float('inf'))
             if B_prime_sub <= dx < Bi:
@@ -365,42 +348,41 @@ def bmssp(graph: Graph, dist: Dict[Node, Weight], edges: List[Edge],
 
 
 # ---------------------------
-# Test harness
+# Bộ Test
 # ---------------------------
 def run_single_test(n: int, m: int, seed: int = 0, source: int = 0):
-    print(f"Generating graph: n={n}, m={m}, seed={seed}")
+    print(f"Tạo đồ thị: n={n}, m={m}, seed={seed}")
     graph, edges = generate_sparse_directed_graph(n, m, seed=seed)
     avg_deg = sum(len(adj) for adj in graph.values()) / n
-    print(f"Graph generated. avg out-degree ≈ {avg_deg:.3f}")
+    print(f"Đồ thị đã tạo. Bậc trung bình ≈ {avg_deg:.3f}, số cạnh: {len(edges)}")
 
-    # Prepare distances
+    # Chuẩn bị khoảng cách
     dist0 = {v: float('inf') for v in graph}
     dist0[source] = 0.0
 
-    # Dijkstra timing
+    # Đo thời gian Dijkstra
     instr_dij = Instrument()
     t0 = time.time()
     dist_dij = dijkstra(graph, source, instr_dij)
     t1 = time.time()
-    print(f"Dijkstra: time={t1-t0:.6f}s, relaxations={instr_dij.relaxations}, heap_ops={instr_dij.heap_ops}, reachable={sum(1 for v in dist_dij.values() if math.isfinite(v))}")
+    print(f"Dijkstra: time={t1-t0:.6f}s, relax={instr_dij.relaxations}, heap_ops={instr_dij.heap_ops}, reachable={sum(1 for v in dist_dij.values() if math.isfinite(v))}")
 
-    # BMSSP practical
+    # Đo thời gian BMSSP thực tế
     dist_bm = {v: float('inf') for v in graph}
     dist_bm[source] = 0.0
     instr_bm = Instrument()
-    # choose top-level recursion l heuristically
     if n <= 2:
         l = 1
     else:
         t_guess = max(1, int(round((math.log(max(3, n)) ** (2.0 / 3.0)))))
         l = max(1, int(max(1, round(math.log(max(3, n)) / t_guess))))
-    print(f"BMSSP params: top-level l={l}")
+    print(f"Tham số BMSSP: tầng đệ quy l={l}")
     t0 = time.time()
     Bp, U_final = bmssp(graph, dist_bm, edges, l, float('inf'), {source}, n, instr_bm)
     t1 = time.time()
-    print(f"BMSSP: time={t1-t0:.6f}s, relaxations={instr_bm.relaxations}, reachable={sum(1 for v in dist_bm.values() if math.isfinite(v))}, B'={Bp}, |U_final|={len(U_final)}")
+    print(f"BMSSP: time={t1-t0:.6f}s, relax={instr_bm.relaxations}, reachable={sum(1 for v in dist_bm.values() if math.isfinite(v))}, B'={Bp}")
 
-    # Compare distances for commonly reachable nodes
+    # So sánh khoảng cách trên các node chung
     diffs = []
     for v in graph:
         dv = dist_dij.get(v, float('inf'))
@@ -408,9 +390,7 @@ def run_single_test(n: int, m: int, seed: int = 0, source: int = 0):
         if math.isfinite(dv) and math.isfinite(db):
             diffs.append(abs(dv - db))
     max_diff = max(diffs) if diffs else 0.0
-    print(f"Distance agreement (max abs diff on commonly reachable nodes): {max_diff:.6e}")
-    # Sanity checks: ideally dist_bm should match dist_dij for many nodes (not necessarily all,
-    # depending on parameter tuning). The practical BMSSP should explore the graph.
+    print(f"Độ sai khác khoảng cách (max abs diff trên các nút cùng reachable): {max_diff:.6e}")
     return {
         'n': n, 'm': m, 'seed': seed,
         'dijkstra_time': (t1 - t0), 'dijkstra_relax': instr_dij.relaxations,
@@ -422,13 +402,13 @@ def run_single_test(n: int, m: int, seed: int = 0, source: int = 0):
 
 
 # ---------------------------
-# CLI main
+# Chạy từ CLI
 # ---------------------------
 def main():
-    parser = argparse.ArgumentParser(description="BMSSP (practical) vs Dijkstra - full implementation")
-    parser.add_argument('-n', '--nodes', type=int, default=200000, help='nodes')
-    parser.add_argument('-m', '--edges', type=int, default=800000, help='edges')
-    parser.add_argument('-s', '--seed', type=int, default=0, help='seed')
+    parser = argparse.ArgumentParser(description="BMSSP (thực tế) vs Dijkstra - cài đặt đầy đủ")
+    parser.add_argument('-n', '--nodes', type=int, default=1000, help='số nút')
+    parser.add_argument('-m', '--edges', type=int, default=400000, help='số cạnh')
+    parser.add_argument('-s', '--seed', type=int, default=0, help='hạt ngẫu nhiên')
     args = parser.parse_args()
     run_single_test(args.nodes, args.edges, seed=args.seed)
 
